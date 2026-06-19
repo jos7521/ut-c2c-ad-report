@@ -373,7 +373,7 @@
 
 <script>
 // ── 설정 ─────────────────────────────────────────────
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzsd9WQ3GDwR2BACvLD6dpQ91FnKcmLEJ5JGWhp2VkJ2am0mCFUUt1ZvSVfI8OS3A/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxzAReuaAJL3FeGmIGSfGvehL06IWrf1-hdBKhaOM0_WnNi_TjQNp3RDiN45yxF_Jw/exec';
 const SHEETS = { Total:'Total', CN:'CN', VN:'VN', PH:'PH' };
 
 // ── 유틸 ─────────────────────────────────────────────
@@ -1193,53 +1193,52 @@ async function loadAllData() {
   document.getElementById('errorBox').style.display = 'none';
 
   try {
-    // Total 먼저 — 실패하면 전체 에러 표시
-    const totalRows = await fetchSheet('Total').catch(e => {
-      throw new Error(`Total 시트 로드 실패: ${e.message}\n\n구글 시트 공유 설정을 확인해주세요.\n(공유 → 링크가 있는 모든 사용자 → 뷰어)`);
-    });
-
-    // 국가별 + 매체별 시트 병렬 fetch
-    const [cnRows, vnRows, phRows, googleRows, fbRows, tiktokRows, appleRows] = await Promise.all([
-      safeFetchSheet('CN'),
-      safeFetchSheet('VN'),
-      safeFetchSheet('PH'),
-      safeFetchSheet('Google'),
-      safeFetchSheet('Facebook'),
-      safeFetchSheet('Tiktok'),
-      safeFetchSheet('Apple'),
-    ]);
+    const data = await fetchAllSheets();
 
     // ── Total 파싱 ──
+    const totalRows    = data['Total'] || [];
     const totalDaily   = extractTotalDaily(totalRows);
     const weekMap      = extractWeekly(totalRows);
     const mediaSummary = extractMediaSummary(totalRows);
 
-    // ── 국가별 파싱 ──
-    // CN: YYYY-MM-DD 형식=전체합산, MM/DD=캠페인별
-    const cnTotal  = cnRows.length ? extractTotalBlock(cnRows) : [];
-    const cnAllBlocks = cnRows.length ? getAllDateBlocks(cnRows) : [];
-    const cnGoogle = cnAllBlocks.length > 0 ? cnAllBlocks[0] : [];
-    // TikTok 블록이 여러 개일 수 있으므로 블록1 이후 전부 날짜별 합산
-    const cnTiktok = mergeBlocks(cnAllBlocks.slice(1));
-    // VN: 전체합산=가장 큰 블록, Google=블록0, Facebook=블록1
-    const vnAllBlocks = vnRows.length ? getAllDateBlocks(vnRows) : [];
-    const vnTotal  = vnRows.length ? extractTotalBlock(vnRows) : [];
-    const vnGoogle = vnAllBlocks.length > 0 ? vnAllBlocks[0] : [];
-    const vnFb     = vnAllBlocks.length > 1 ? vnAllBlocks[1] : [];
-    // PH: 전체합산=가장 큰 블록, Facebook=블록0, TikTok=블록1
-    const phAllBlocks = phRows.length ? getAllDateBlocks(phRows) : [];
-    const phTotal  = phRows.length ? extractTotalBlock(phRows) : [];
-    const phFb     = phAllBlocks.length > 0 ? phAllBlocks[0] : [];
+    // ── 매체별 캠페인 데이터 ──
+    const googleCamps  = data['Google']   ? data['Google'].campaigns   : null;
+    const fbCamps      = data['Facebook'] ? data['Facebook'].campaigns : null;
+    const tiktokCamps  = data['Tiktok']   ? data['Tiktok'].campaigns   : null;
+    const appleCamps   = data['Apple']    ? data['Apple'].campaigns    : null;
 
-    // ── 국가 요약 ──
-    const cnSum = cnRows.length ? extractCountrySummary(cnRows) : {};
-    const vnSum = vnRows.length ? extractCountrySummary(vnRows) : {};
-    const phSum = phRows.length ? extractCountrySummary(phRows) : {};
+    // ── 매체별 일별 데이터 ──
+    const googleRows   = data['Google']   ? data['Google'].raw   : [];
+    const fbRows       = data['Facebook'] ? data['Facebook'].raw : [];
+    const tiktokRows   = data['Tiktok']   ? data['Tiktok'].raw   : [];
+    const appleRows    = data['Apple']    ? data['Apple'].raw    : [];
 
-    // ── 디버그: 파싱 결과 콘솔 출력 ──
+    // ── 국가별 데이터 (캠페인명 기반 자동 분류) ──
+    const countries = data['__countries__'] || {};
+    const cnData = countries['CN'] || null;
+    const vnData = countries['VN'] || null;
+    const phData = countries['PH'] || null;
+
+    // 국가 KPI
+    const cnSum = cnData ? cnData.total : {};
+    const vnSum = vnData ? vnData.total : {};
+    const phSum = phData ? phData.total : {};
+
+    // 국가별 일별 데이터
+    const cnDaily = cnData ? cnData.daily : [];
+    const vnDaily = vnData ? vnData.daily : [];
+    const phDaily = phData ? phData.daily : [];
+
+    // 국가별 매체 분리
+    const cnGoogleDaily  = getDailyByCamp(data, 'Google',   /china/i);
+    const cnTiktokDaily  = getDailyByCamp(data, 'Tiktok',   /china/i);
+    const vnGoogleDaily  = getDailyByCamp(data, 'Google',   /vietnam/i);
+    const vnFbDaily      = getDailyByCamp(data, 'Facebook', /vietnam/i);
+    const phFbDaily      = getDailyByCamp(data, 'Facebook', /philippines|\bPH\b/i);
+
     console.log('📊 파싱 결과:', {
       totalDaily: totalDaily.length, weekMap: Object.keys(weekMap),
-      cnTotal: cnTotal.length, vnTotal: vnTotal.length, phTotal: phTotal.length,
+      cnDaily: cnDaily.length, vnDaily: vnDaily.length, phDaily: phDaily.length,
     });
 
     // ── 렌더 ──
@@ -1248,76 +1247,69 @@ async function loadAllData() {
     renderCharts(totalDaily, mediaSummary, cnSum, vnSum, phSum);
     buildTotalMediaTable(totalDaily);
     buildTotalGATable(totalDaily);
-    // 월별 비교표
     buildMonthlyTable(totalRows);
 
     // 매체별 캠페인 합계표
-    // 매체 캠페인 합계 — Apps Script에서 파싱된 데이터 사용
-    const [googleCamps, fbCamps, tiktokCamps, appleCamps] = await Promise.all([
-      fetchCampaigns('Google'),
-      fetchCampaigns('Facebook'),
-      fetchCampaigns('Tiktok'),
-      fetchCampaigns('Apple'),
-    ]);
     buildCampTableFromData('tbl-google-camp', googleCamps, 'Google');
     buildCampTableFromData('tbl-fb-camp',     fbCamps,     'Facebook');
     buildCampTableFromData('tbl-tiktok-camp', tiktokCamps, 'TikTok');
+    buildCampTableFromData('tbl-apple-camp',  appleCamps,  'Apple');
 
-    // 매체별 캠페인 합계 + 일별
-    buildCampTableFromData('tbl-apple-camp', appleCamps, 'Apple');
+    // 매체별 일별 성과
     const mediaGoogle = googleRows.length ? extractTotalBlock(googleRows) : [];
-    const mediaFb     = fbRows.length     ? extractTotalBlock(fbRows)        : [];
+    const mediaFb     = fbRows.length     ? extractTotalBlock(fbRows)     : [];
     const mediaTiktok = tiktokRows.length ? extractTotalBlock(tiktokRows) : [];
-    const mediaApple  = appleRows.length  ? extractDateBlock(appleRows, 0)  : [];
+    const mediaApple  = appleRows.length  ? extractDateBlock(appleRows, 0) : [];
     buildTable('tbl-media-google', mediaGoogle);
     buildTable('tbl-media-fb',     mediaFb);
     buildTable('tbl-media-tiktok', mediaTiktok);
     buildTable('tbl-media-apple',  mediaApple);
-    // Apple 빈 데이터 처리
     if (!mediaApple.length) {
       document.getElementById('apple-empty').style.display = 'block';
     }
 
-    buildTable('tbl-cn-total',  cnTotal);
-    buildTable('tbl-cn-google', cnGoogle);
-    buildTable('tbl-cn-tiktok', cnTiktok);
-    buildTable('tbl-vn-total',  vnTotal);
-    buildTable('tbl-vn-google', vnGoogle);
-    buildTable('tbl-vn-fb',     vnFb);
-    buildTable('tbl-ph-total',  phTotal);
-    buildTable('tbl-ph-fb',     phFb);
+    // 국가별 일별 성과
+    buildTable('tbl-cn-total',  cnDaily);
+    buildTable('tbl-cn-google', cnGoogleDaily);
+    buildTable('tbl-cn-tiktok', cnTiktokDaily);
+    buildTable('tbl-vn-total',  vnDaily);
+    buildTable('tbl-vn-google', vnGoogleDaily);
+    buildTable('tbl-vn-fb',     vnFbDaily);
+    buildTable('tbl-ph-total',  phDaily);
+    buildTable('tbl-ph-fb',     phFbDaily);
 
-    // ── 누락 시트 안내 ──
-    const missing = [];
-    if (!cnRows.length) missing.push('CN');
-    if (!vnRows.length) missing.push('VN');
-    if (!phRows.length) missing.push('PH');
-    if (missing.length) {
-      document.getElementById('errorBox').style.display = 'block';
-      document.getElementById('errorBox').innerHTML = `
-        <strong>⚠️ 일부 시트를 찾을 수 없어요</strong>
-        구글 시트에 <b>${missing.join(', ')}</b> 시트가 없거나 시트명이 달라요.<br>
-        시트 탭 이름이 정확히 <b>CN / VN / PH</b> 인지 확인해주세요.<br>
-        Total 시트 데이터는 정상 로드됐어요 ✅
-      `;
-    }
-
-    // ── 업데이트 시각 ──
-    const now = new Date();
-    document.getElementById('lastUpdated').textContent = `마지막 업데이트: ${now.toLocaleString('ko-KR')}`;
-
-  } catch (e) {
-    console.error('❌ 로드 실패:', e);
+  } catch(e) {
     document.getElementById('errorBox').style.display = 'block';
-    document.getElementById('errorBox').innerHTML = `
-      <strong>⚠️ 데이터를 불러오지 못했어요</strong>
-      ${e.message}<br><br>
-      <button class="refresh-btn" onclick="loadAllData()">↻ 다시 시도</button>
-    `;
+    document.getElementById('errorBox').innerHTML = `<strong>⚠️ 데이터 로드 실패</strong><br>${e.message}`;
+    console.error(e);
   } finally {
     document.getElementById('loadingOverlay').style.display = 'none';
   }
 }
+
+// 특정 매체에서 국가 패턴에 맞는 캠페인들의 일별 데이터 합산
+function getDailyByCamp(data, mediaKey, countryPattern) {
+  const sheet = data[mediaKey];
+  if (!sheet || !sheet.daily) return [];
+  const map = {};
+  sheet.daily.forEach(section => {
+    if (!countryPattern.test(section.campName)) return;
+    section.rows.forEach(row => {
+      if (!map[row.date]) map[row.date] = { date: row.date, imp:0, clk:0, cost:0, reg:0 };
+      const d = map[row.date];
+      d.imp += row.imp; d.clk += row.clk; d.cost += row.cost; d.reg += row.reg;
+    });
+  });
+  return Object.values(map)
+    .sort((a,b) => a.date.localeCompare(b.date))
+    .map(d => ({
+      ...d,
+      ctr: d.imp > 0 ? Math.round(d.clk/d.imp*10000)/100 : 0,
+      cpc: d.clk > 0 ? Math.round(d.cost/d.clk) : 0,
+      cpa: d.reg > 0 ? Math.round(d.cost/d.reg) : 0,
+    }));
+}
+
 
 loadAllData();
 </script>
