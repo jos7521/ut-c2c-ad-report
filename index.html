@@ -707,11 +707,10 @@ function extractMediaSummary(rows) {
 // 국가 합계 파서
 function extractCountrySummary(rows) {
   for (const row of rows) {
-    const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
+    const cells = row.map(c => String(c||'').replace(/[₩,]/g,'').trim());
     for (let i = 0; i < Math.min(cells.length, 4); i++) {
       if (cells[i] === 'Total') {
         const cost = num(cells[i+5]);
-        console.log('🔍 Total행 발견 i='+i+' cost='+cost+' cells='+JSON.stringify(cells.slice(0,10)));
         if (cost > 50000) {
           return { imp: num(cells[i+1]), clk: num(cells[i+2]), cost: cost, reg: num(cells[i+6]), cpa: num(cells[i+8]) };
         }
@@ -1039,15 +1038,17 @@ function buildCampTable(tableId, rows, mediaKey) {
 
   const validCamps = campaigns.filter(c => c.total);
 
-  // 자동 감지 실패 시 1섹션 방식 폴백
+  // 자동 감지 실패 시 1섹션 방식 폴백 (cells[1] 기준)
   if (!validCamps.length) {
     const campRows = [];
     for (const row of rows) {
-      const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
+      const cells = row.map(c => String(c||'').replace(/[₩,]/g,'').trim());
       if (parseDate(cells[1]) || parseDate(cells[0])) break;
-      const campName = cells[0];
+      // cells[1]에서 캠페인명 읽기
+      const campName = cells[1];
       const cost = num(cells[6]);
-      if (!campName || campName === '캠페인별' || campName === '날짜' || campName === 'All') continue;
+      const skipNames = ['캠페인별','날짜','All','Media Data','노출','클릭','','캠페인'];
+      if (!campName || skipNames.includes(campName)) continue;
       if (cost <= 0) continue;
       const ctrRaw = cells[4]||'';
       const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : num(cells[4])*100;
