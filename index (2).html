@@ -230,7 +230,6 @@
       <div class="cs-row"><span class="label">CPA</span><span class="val" id="ph-cpa">-</span></div>
       <div style="margin-top:10px;display:flex;gap:5px;">
         <span class="badge badge-fb">Facebook</span>
-        <span class="badge badge-tiktok">TikTok</span>
       </div>
     </div>
   </div>
@@ -315,7 +314,7 @@
       <span class="flag">🇨🇳</span>
       <div>
         <div class="section-title">중국 (China) · 일별 광고 성과</div>
-        <div class="country-label">Google App AOS China &amp; TikTok China_traffic</div>
+        <div class="country-label">Google App AOS China &amp; TikTok China_traffic · China_Aeo</div>
       </div>
     </div>
     <div class="card">
@@ -357,18 +356,16 @@
       <span class="flag">🇵🇭</span>
       <div>
         <div class="section-title">필리핀 (Philippines) · 일별 광고 성과</div>
-        <div class="country-label">Facebook PH_potential &amp; TikTok PH_Traffic</div>
+        <div class="country-label">Facebook PH_potential</div>
       </div>
     </div>
     <div class="card">
       <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('ph','total',this)">전체 합산</button>
         <button class="tab-btn" onclick="switchTab('ph','fb',this)"><span class="badge badge-fb">Facebook</span></button>
-        <button class="tab-btn" onclick="switchTab('ph','tiktok',this)"><span class="badge badge-tiktok">TikTok</span></button>
       </div>
       <div id="ph-total" class="tab-pane active"><div class="table-wrap"><table class="perf-table" id="tbl-ph-total"></table></div></div>
       <div id="ph-fb" class="tab-pane"><div class="table-wrap"><table class="perf-table" id="tbl-ph-fb"></table></div></div>
-      <div id="ph-tiktok" class="tab-pane"><div class="table-wrap"><table class="perf-table" id="tbl-ph-tiktok"></table></div></div>
     </div>
   </div>
 
@@ -702,28 +699,31 @@ function extractMediaSummary(rows) {
 
 // 국가 합계 파서
 function extractCountrySummary(rows) {
-  // 컬럼 구조: 날짜(0)|노출(1)|클릭(2)|CTR(3)|CPC(4)|광고비(5)|회원가입(6)|CVR(7)|CPA(8)
+  // 시트 구조: 빈칸(0)|캠페인(1)|노출(2)|클릭(3)|CTR(4)|CPC(5)|광고비(6)|회원가입(7)|CVR(8)|CPA(9)
+  // Total 행: cells[1]='Total', cells[2]=노출, cells[3]=클릭, cells[6]=광고비, cells[7]=회원가입, cells[9]=CPA
   for (const row of rows) {
     const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
     for (let i = 0; i < Math.min(cells.length, 4); i++) {
       if (cells[i] === 'Total') {
-        const cost = num(cells[5]);
+        const cost = num(cells[i+5]);
         if (cost > 50000) {
-          return { imp: num(cells[1]), clk: num(cells[2]), cost: cost, reg: num(cells[6]), cpa: num(cells[8]) };
+          return { imp: num(cells[i+1]), clk: num(cells[i+2]), cost: cost, reg: num(cells[i+6]), cpa: num(cells[i+8]) };
         }
       }
     }
   }
-  // Total 텍스트 없으면 가장 큰 광고비 행 찾기
-  let maxRow = null, maxCost = 0;
+  // Total 없으면 광고비 가장 큰 비날짜 행
+  let maxRow = null, maxCost = 0, maxOff = 0;
   for (const row of rows) {
     const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
     if (parseDate(cells[0]) || parseDate(cells[1])) continue;
-    const cost = num(cells[5]);
-    if (cost > maxCost && cost > 50000) { maxCost = cost; maxRow = cells; }
+    for (let i = 0; i < 3; i++) {
+      const cost = num(cells[i+5]);
+      if (cost > maxCost && cost > 50000) { maxCost = cost; maxRow = cells; maxOff = i; }
+    }
   }
   if (maxRow) {
-    return { imp: num(maxRow[1]), clk: num(maxRow[2]), cost: num(maxRow[5]), reg: num(maxRow[6]), cpa: num(maxRow[8]) };
+    return { imp: num(maxRow[maxOff+1]), clk: num(maxRow[maxOff+2]), cost: num(maxRow[maxOff+5]), reg: num(maxRow[maxOff+6]), cpa: num(maxRow[maxOff+8]) };
   }
   return {};
 }
@@ -987,33 +987,22 @@ function buildMonthlyTable(rows) {
   el.innerHTML = html + '</tbody>';
 }
 
-const CAMP_NAMES = {
-  // cost>0인 행 순서로 매핑 (0인 행 skip)
-  // Google: 1=전체, 2=App_AOS_China (Apple 빈값 skip), 3=App Promotion_AOS_Vietnam
-  google: {1:'전체 (Google)', 2:'(3) App_AOS_China', 3:'(4) App Promotion_AOS_Vietnam'},
-  // Facebook: 1=전체, 2=VN_potential, 3=PH_potential, 4=PH_app promo
-  fb:     {1:'전체 (Facebook)', 2:'(2) Vietnam_potential_메신저상담', 3:'(3) Philippines_potential_메신저상담', 4:'(4) Philippines_app promo'},
-  // TikTok: 1=전체, 2=China_traffic, 3=PH_Traffic
-  tiktok: {1:'전체 (TikTok)', 2:'(2) China_traffic', 3:'(3) PH_Traffic'},
-  apple:  {1:'전체 (Apple)', 2:'(2) keyword_all language', 3:'(3) Search tap'},
-};
-
 // ── 캠페인별 합계표 렌더 (순서 기반) ─────────────────
 function buildCampTable(tableId, rows, mediaKey) {
   const el = document.getElementById(tableId);
   if (!el || !rows.length) return;
-  const nameMap = CAMP_NAMES[mediaKey] || {};
   const campRows = [];
-  let costRowIdx = 0;
 
+  // 시트에서 캠페인 이름 자동 감지
+  // 구조: 빈칸(0) | 캠페인명(1) | 노출(2) | 클릭(3) | CTR(4) | CPC(5) | 광고비(6) | 회원가입(7) | CVR(8) | CPA(9)
   for (const row of rows) {
     const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
+    // 날짜 행이 나오면 캠페인 섹션 끝
     if (parseDate(cells[1]) || parseDate(cells[0])) break;
     const cost = num(cells[6]);
-    if (cost > 0) {
-      costRowIdx++;
-      const campName = nameMap[costRowIdx];
-      if (!campName) continue;
+    const campName = cells[1];
+    // 캠페인명 있고 비용 > 0인 행만 (헤더, 빈행 제외)
+    if (cost > 0 && campName && campName !== '캠페인' && campName !== 'Total') {
       const ctrRaw = cells[4]||'';
       const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : num(cells[4])*100;
       campRows.push({
@@ -1022,7 +1011,18 @@ function buildCampTable(tableId, rows, mediaKey) {
         ctr: Math.round(ctrVal*100)/100,
         cpc: num(cells[5]), cost: cost,
         reg: num(cells[7]), cpa: num(cells[9]),
-        isFirst: costRowIdx === 1,
+        isFirst: false,
+      });
+    }
+    // Total 행은 맨 위에 표시
+    if (campName === 'Total' && cost > 0) {
+      campRows.unshift({
+        name: '전체 (' + (mediaKey === 'tiktok' ? 'TikTok' : mediaKey === 'fb' ? 'Facebook' : mediaKey === 'google' ? 'Google' : mediaKey) + ')',
+        imp: num(cells[2]), clk: num(cells[3]),
+        ctr: Math.round((cells[4]||'').endsWith('%') ? parseFloat(cells[4]) * 100 : num(cells[4])*10000) / 100,
+        cpc: num(cells[5]), cost: cost,
+        reg: num(cells[7]), cpa: num(cells[9]),
+        isFirst: true,
       });
     }
   }
@@ -1042,6 +1042,7 @@ function buildCampTable(tableId, rows, mediaKey) {
   });
   el.innerHTML = html + '</tbody>';
 };
+
 
 
 
@@ -1099,7 +1100,6 @@ async function loadAllData() {
     const phAllBlocks = phRows.length ? getAllDateBlocks(phRows) : [];
     const phTotal  = phRows.length ? extractTotalBlock(phRows) : [];
     const phFb     = phAllBlocks.length > 0 ? phAllBlocks[0] : [];
-    const phTiktok = phAllBlocks.length > 1 ? phAllBlocks[1] : [];
 
     // ── 국가 요약 ──
     const cnSum = cnRows.length ? extractCountrySummary(cnRows) : {};
@@ -1149,7 +1149,6 @@ async function loadAllData() {
     buildTable('tbl-vn-fb',     vnFb);
     buildTable('tbl-ph-total',  phTotal);
     buildTable('tbl-ph-fb',     phFb);
-    buildTable('tbl-ph-tiktok', phTiktok);
 
     // ── 누락 시트 안내 ──
     const missing = [];
