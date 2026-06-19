@@ -1000,6 +1000,8 @@ function buildCampTable(tableId, rows, mediaKey) {
   if (!el || !rows.length) return;
 
   const mediaLabel = {tiktok:'TikTok', fb:'Facebook', google:'Google', apple:'Apple'}[mediaKey] || mediaKey;
+  // 디버그: 첫 15행 출력
+  console.log(`🔎 [${mediaKey}] 첫15행:`, rows.slice(0,15).map(r => r.map(c=>String(c||'').trim()).slice(0,5)));
   // 섹션 헤더 패턴: "(숫자) 캠페인명"
   const sectionPattern = /^\(\d+\)\s+.+/;
   const campaigns = [];
