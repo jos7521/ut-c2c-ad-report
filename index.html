@@ -373,7 +373,7 @@
 
 <script>
 // ── 설정 ─────────────────────────────────────────────
-const SHEET_ID = '1vIU2tFMZHNig7TXsUsJvskZInNCDKhmcI2eSSrsVBuU';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxe9Z_NvYzM4bHsWmOxPAkwH37Ia5KH16RXup-IFs0fAZ7kTY7evSg9aU9d4leVCWw/exec';
 const SHEETS = { Total:'Total', CN:'CN', VN:'VN', PH:'PH' };
 
 // ── 유틸 ─────────────────────────────────────────────
@@ -402,18 +402,25 @@ function cpaBadge(cpa) {
   return cls ? `<span class="${cls}">${fmtW(cpa)}</span>` : fmtW(cpa);
 }
 
-// ── 구글 시트 CSV fetch ───────────────────────────────
-async function fetchSheet(sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}&cachebust=${Date.now()}`;
+// ── Apps Script fetch (전체 시트 한번에) ─────────────
+let _sheetCache = null;
+async function fetchAllSheets() {
+  if (_sheetCache) return _sheetCache;
+  const url = APPS_SCRIPT_URL + '?cachebust=' + Date.now();
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  // 디버그: 첫 200자와 탭 포함 여부 확인
-  const hasTabs = text.includes('\t');
-  const hasComma = text.includes(',');
-  console.log(`[${sheetName}] 탭:${hasTabs} 콤마:${hasComma} 첫100자:`, JSON.stringify(text.slice(0,100)));
-  return parseCSV(text);
+  if (!res.ok) throw new Error('Apps Script 응답 오류: ' + res.status);
+  _sheetCache = await res.json();
+  return _sheetCache;
 }
+
+async function fetchSheet(sheetName) {
+  const data = await fetchAllSheets();
+  const rows = data[sheetName];
+  if (!rows) throw new Error(sheetName + ' 시트 없음');
+  console.log(\`[${sheetName}] 탭:false 콤마:true 첫100자: "\${JSON.stringify(rows[0]||[]).slice(0,100)}"\`);
+  return rows;
+}
+
 
 function parseCSV(text) {
   const lines = text.split('\n').filter(l => l.trim() !== '');
@@ -699,13 +706,12 @@ function extractMediaSummary(rows) {
 
 // 국가 합계 파서
 function extractCountrySummary(rows) {
-  // 시트 구조: 빈칸(0)|캠페인(1)|노출(2)|클릭(3)|CTR(4)|CPC(5)|광고비(6)|회원가입(7)|CVR(8)|CPA(9)
-  // Total 행: cells[1]='Total', cells[2]=노출, cells[3]=클릭, cells[6]=광고비, cells[7]=회원가입, cells[9]=CPA
   for (const row of rows) {
     const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
     for (let i = 0; i < Math.min(cells.length, 4); i++) {
       if (cells[i] === 'Total') {
         const cost = num(cells[i+5]);
+        console.log('🔍 Total행 발견 i='+i+' cost='+cost+' cells='+JSON.stringify(cells.slice(0,10)));
         if (cost > 50000) {
           return { imp: num(cells[i+1]), clk: num(cells[i+2]), cost: cost, reg: num(cells[i+6]), cpa: num(cells[i+8]) };
         }
