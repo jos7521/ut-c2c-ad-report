@@ -1038,30 +1038,35 @@ function buildCampTable(tableId, rows, mediaKey) {
 
   const validCamps = campaigns.filter(c => c.total);
 
-  // 자동 감지 실패 시 1섹션 방식 폴백 (cells[1] 기준)
-  // "1. Campaign Performance" 섹션만 읽고 "2." 섹션 시작되면 중단
+  // 자동 감지 실패 시 1섹션 방식 폴백
+  // "1. Campaign Performance" ~ "2." 섹션 사이만 읽기
   if (!validCamps.length) {
     const campRows = [];
     let inCampSection = false;
     for (const row of rows) {
-      const cells = row.map(c => String(c||'').replace(/[₩, ]/g,'').trim());
-      const c1 = cells[1] || '';
+      // 따옴표 포함 모든 특수문자 제거 후 파싱
+      const cells = row.map(c => String(c||'').replace(/[₩,"'\s]/g,'').trim());
+      const c1raw = String(row[1]||'').replace(/"/g,'').trim();
 
-      // "1. Campaign Performance" 섹션 시작
-      if (c1.includes('1.') && c1.includes('Campaign')) { inCampSection = true; continue; }
+      // "1. Campaign Performance" 섹션 진입
+      if (c1raw.includes('1.') && (c1raw.includes('Campaign') || c1raw.includes('캠페인'))) {
+        inCampSection = true; continue;
+      }
       // "2." 섹션 시작되면 중단
-      if (c1.match(/^2\./) || c1.match(/^2\./) ) break;
-      // 날짜 행 나오면 중단
-      if (parseDate(c1) || parseDate(cells[0])) break;
+      if (inCampSection && c1raw.match(/^\s*2\./)) break;
+      if (!inCampSection) continue;
 
-      const campName = c1;
+      // 날짜 행 나오면 중단
+      if (parseDate(c1raw)) break;
+
+      const campName = c1raw;
       const cost = num(cells[6]);
-      const skipNames = ['캠페인별','날짜','All','MediaData','노출','클릭','','캠페인','CPC','CTR','Cost','Budget'];
-      if (!campName || skipNames.some(s => campName.includes(s))) continue;
+      const skipNames = ['캠페인별','날짜','All','MediaData','노출','클릭','캠페인','CPC','CTR','Cost','Budget',''];
+      if (!campName || skipNames.some(s => campName === s)) continue;
       if (cost <= 0) continue;
 
-      const ctrRaw = cells[4]||'';
-      const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : num(cells[4])*100;
+      const ctrRaw = String(row[4]||'').replace(/"/g,'').trim();
+      const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : 0;
       const isTotal = campName === 'Total';
       const entry = {
         name: isTotal ? '전체 (' + mediaLabel + ')' : campName,
