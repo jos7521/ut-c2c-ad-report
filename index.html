@@ -1039,17 +1039,27 @@ function buildCampTable(tableId, rows, mediaKey) {
   const validCamps = campaigns.filter(c => c.total);
 
   // 자동 감지 실패 시 1섹션 방식 폴백 (cells[1] 기준)
+  // "1. Campaign Performance" 섹션만 읽고 "2." 섹션 시작되면 중단
   if (!validCamps.length) {
     const campRows = [];
+    let inCampSection = false;
     for (const row of rows) {
-      const cells = row.map(c => String(c||'').replace(/[₩,]/g,'').trim());
-      if (parseDate(cells[1]) || parseDate(cells[0])) break;
-      // cells[1]에서 캠페인명 읽기
-      const campName = cells[1];
+      const cells = row.map(c => String(c||'').replace(/[₩, ]/g,'').trim());
+      const c1 = cells[1] || '';
+
+      // "1. Campaign Performance" 섹션 시작
+      if (c1.includes('1.') && c1.includes('Campaign')) { inCampSection = true; continue; }
+      // "2." 섹션 시작되면 중단
+      if (c1.match(/^2\./) || c1.match(/^2\./) ) break;
+      // 날짜 행 나오면 중단
+      if (parseDate(c1) || parseDate(cells[0])) break;
+
+      const campName = c1;
       const cost = num(cells[6]);
-      const skipNames = ['캠페인별','날짜','All','Media Data','노출','클릭','','캠페인'];
-      if (!campName || skipNames.includes(campName)) continue;
+      const skipNames = ['캠페인별','날짜','All','MediaData','노출','클릭','','캠페인','CPC','CTR','Cost','Budget'];
+      if (!campName || skipNames.some(s => campName.includes(s))) continue;
       if (cost <= 0) continue;
+
       const ctrRaw = cells[4]||'';
       const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : num(cells[4])*100;
       const isTotal = campName === 'Total';
