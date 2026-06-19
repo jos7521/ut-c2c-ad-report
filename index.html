@@ -1045,7 +1045,7 @@ function buildCampTable(tableId, rows, mediaKey) {
     let inCampSection = false;
     for (const row of rows) {
       // 따옴표 포함 모든 특수문자 제거 후 파싱
-      const cells = row.map(c => String(c||'').replace(/[₩,"'\s]/g,'').trim());
+      const cells = row.map(c => String(c||'').replace(/[₩,"']/g,'').trim());
       const c1raw = String(row[1]||'').replace(/"/g,'').trim();
 
       // "1. Campaign Performance" 섹션 진입
