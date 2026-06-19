@@ -373,7 +373,7 @@
 
 <script>
 // ── 설정 ─────────────────────────────────────────────
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxe9Z_NvYzM4bHsWmOxPAkwH37Ia5KH16RXup-IFs0fAZ7kTY7evSg9aU9d4leVCWw/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzte8ss3AHES_nARPQjJH2WxRP9yCEX6xP6X3ygULmESaJi06yRzW9uff4SbfnLYws/exec';
 const SHEETS = { Total:'Total', CN:'CN', VN:'VN', PH:'PH' };
 
 // ── 유틸 ─────────────────────────────────────────────
@@ -415,10 +415,20 @@ async function fetchAllSheets() {
 
 async function fetchSheet(sheetName) {
   const data = await fetchAllSheets();
-  const rows = data[sheetName];
-  if (!rows) throw new Error(sheetName + ' 시트 없음');
+  const sheet = data[sheetName];
+  if (!sheet) throw new Error(sheetName + ' 시트 없음');
+  // 매체 탭은 {campaigns, daily, raw} 구조, 나머지는 배열
+  const rows = Array.isArray(sheet) ? sheet : sheet.raw;
   console.log(`✅ [${sheetName}] ${rows.length}행 로드 성공`);
   return rows;
+}
+
+// 매체 캠페인 합계 가져오기 (Apps Script에서 파싱된 데이터)
+async function fetchCampaigns(sheetName) {
+  const data = await fetchAllSheets();
+  const sheet = data[sheetName];
+  if (!sheet || Array.isArray(sheet)) return null;
+  return sheet.campaigns || null;
 }
 
 
@@ -994,111 +1004,126 @@ function buildMonthlyTable(rows) {
 
 // ── 캠페인별 합계표 렌더 (순서 기반) ─────────────────
 // 매체별 캠페인 합계표 - 섹션 헤더 자동 감지
+
+// Apps Script에서 파싱된 캠페인 데이터로 테이블 렌더
+function buildCampTableFromData(tableId, campaigns, mediaLabel) {
+  const el = document.getElementById(tableId);
+  if (!el || !campaigns || !campaigns.length) return;
+
+  const rows = campaigns.map(c => ({
+    name: c.name === '__total__' ? '전체 (' + mediaLabel + ')' : c.name,
+    imp: c.imp, clk: c.clk, ctr: c.ctr,
+    cpc: c.cpc, cost: c.cost, reg: c.reg, cpa: c.cpa,
+    isFirst: c.name === '__total__',
+  }));
+
+  renderCampTable(el, rows);
+}
+
 function buildCampTable(tableId, rows, mediaKey) {
   const el = document.getElementById(tableId);
   if (!el || !rows.length) return;
-
   const mediaLabel = {tiktok:'TikTok', fb:'Facebook', google:'Google', apple:'Apple'}[mediaKey] || mediaKey;
-  // 디버그: 첫 15행 출력
-  console.log(`🔎 [${mediaKey}] 첫15행:`, rows.slice(0,15).map(r => r.map(c=>String(c||'').trim()).slice(0,5)));
-  // 섹션 헤더 패턴: "(숫자) 캠페인명"
-  const sectionPattern = /^\(\d+\)\s+.+/;
-  const campaigns = [];
-  let currentCamp = null;
+
+  const campRows = [];
+  let inSection = false;
 
   for (const row of rows) {
-    const cells = row.map(c => String(c||'').replace(/"/g,'').trim());
-    const c0 = cells[0] || '';
-    const c1 = cells[1] || '';
+    const c1 = String(row[1]||'').replace(/"/g,'').trim();
 
-    // 섹션 헤더 감지
-    if (sectionPattern.test(c0) || sectionPattern.test(c1)) {
-      const name = sectionPattern.test(c0) ? c0 : c1;
-      currentCamp = { name, total: null };
-      campaigns.push(currentCamp);
-      continue;
+    // "1. Campaign Performance" 섹션 진입
+    if (c1.includes('1.') && (c1.includes('Campaign') || c1.includes('캠페인'))) {
+      inSection = true; continue;
     }
+    // "2." 이상 섹션 나오면 중단
+    if (inSection && /^\s*[2-9]\./.test(c1)) break;
+    if (!inSection) continue;
+    // 날짜 행 나오면 중단
+    if (parseDate(c1)) break;
 
-    // Total 행 감지
-    if (currentCamp && (c0 === 'Total' || c1 === 'Total')) {
-      const off = c0 === 'Total' ? 0 : 1;
-      const cost = num(cells[off + 5]);
-      if (cost > 0) {
-        const ctrRaw = cells[off+3]||'';
-        const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : num(cells[off+3])*100;
-        currentCamp.total = {
-          imp: num(cells[off+1]), clk: num(cells[off+2]),
-          ctr: Math.round(ctrVal*100)/100,
-          cpc: num(cells[off+4]), cost,
-          reg: num(cells[off+6]), cpa: num(cells[off+8]),
-        };
-      }
-    }
+    // 헤더 행 스킵
+    const skip = ['캠페인별','날짜','All','Media Data','노출','클릭','캠페인','CPC','CTR','Cost','Budget',''];
+    if (skip.includes(c1)) continue;
+
+    // 비용 파싱 (₩, 공백, 쉼표 제거)
+    const costRaw = String(row[6]||'').replace(/[₩,\s]/g,'').trim();
+    const cost = parseFloat(costRaw) || 0;
+    if (cost <= 0) continue;
+
+    const impRaw  = String(row[2]||'').replace(/[,\s]/g,'').trim();
+    const clkRaw  = String(row[3]||'').replace(/[,\s]/g,'').trim();
+    const ctrRaw  = String(row[4]||'').replace(/[,\s]/g,'').trim();
+    const cpcRaw  = String(row[5]||'').replace(/[₩,\s]/g,'').trim();
+    const regRaw  = String(row[7]||'').replace(/[,\s]/g,'').trim();
+    const cpaRaw  = String(row[9]||'').replace(/[₩,\s]/g,'').trim();
+
+    const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : 0;
+    const isTotal = c1 === 'Total';
+
+    const entry = {
+      name: isTotal ? '전체 (' + mediaLabel + ')' : c1,
+      imp: parseFloat(impRaw)||0, clk: parseFloat(clkRaw)||0,
+      ctr: Math.round(ctrVal*100)/100,
+      cpc: parseFloat(cpcRaw)||0, cost,
+      reg: parseFloat(regRaw)||0, cpa: parseFloat(cpaRaw)||0,
+      isFirst: isTotal,
+    };
+    if (isTotal) campRows.unshift(entry);
+    else campRows.push(entry);
   }
 
-  const validCamps = campaigns.filter(c => c.total);
-
-  // 자동 감지 실패 시 1섹션 방식 폴백
-  // "1. Campaign Performance" ~ "2." 섹션 사이만 읽기
-  if (!validCamps.length) {
-    const campRows = [];
-    let inCampSection = false;
+  // TikTok: 3. Daily Performance 섹션 헤더에서 추가 캠페인 읽기
+  if (mediaKey === 'tiktok') {
+    let inDaily = false;
     for (const row of rows) {
-      // 따옴표 포함 모든 특수문자 제거 후 파싱
-      const cells = row.map(c => String(c||'').replace(/[₩,"']/g,'').trim());
-      const c1raw = String(row[1]||'').replace(/"/g,'').trim();
-
-      // "1. Campaign Performance" 섹션 진입
-      if (c1raw.includes('1.') && (c1raw.includes('Campaign') || c1raw.includes('캠페인'))) {
-        inCampSection = true; continue;
+      const c1 = String(row[1]||'').replace(/"/g,'').trim();
+      if (c1.includes('3.') && c1.includes('Daily')) { inDaily = true; continue; }
+      if (!inDaily) continue;
+      // "(숫자) 캠페인명" 패턴 = 섹션 헤더
+      if (/^\(\d+\)\s+.+/.test(c1)) {
+        // 이미 campRows에 있으면 스킵
+        if (campRows.some(r => r.name === c1)) continue;
+        // 이 섹션의 Total 행 찾기
+        let found = false;
+        for (let j = rows.indexOf(row)+1; j < Math.min(rows.indexOf(row)+5, rows.length); j++) {
+          const tc1 = String(rows[j][1]||'').replace(/"/g,'').trim();
+          if (tc1 === 'Total' || tc1 === 'All') {
+            const costR = String(rows[j][6]||'').replace(/[₩,\s]/g,'').trim();
+            const cost2 = parseFloat(costR)||0;
+            if (cost2 > 0) {
+              campRows.push({
+                name: c1,
+                imp: parseFloat(String(rows[j][2]||'').replace(/[,\s]/g,''))||0,
+                clk: parseFloat(String(rows[j][3]||'').replace(/[,\s]/g,''))||0,
+                ctr: parseFloat(String(rows[j][4]||'').replace(/[^0-9.]/g,''))||0,
+                cpc: parseFloat(String(rows[j][5]||'').replace(/[₩,\s]/g,''))||0,
+                cost: cost2,
+                reg: parseFloat(String(rows[j][7]||'').replace(/[,\s]/g,''))||0,
+                cpa: parseFloat(String(rows[j][9]||'').replace(/[₩,\s]/g,''))||0,
+                isFirst: false,
+              });
+              found = true;
+            }
+            break;
+          }
+        }
       }
-      // "2." 섹션 시작되면 중단
-      if (inCampSection && c1raw.match(/^\s*2\./)) break;
-      if (!inCampSection) continue;
-
-      // 날짜 행 나오면 중단
-      if (parseDate(c1raw)) break;
-
-      const campName = c1raw;
-      const cost = num(cells[6]);
-      const skipNames = ['캠페인별','날짜','All','MediaData','노출','클릭','캠페인','CPC','CTR','Cost','Budget',''];
-      if (!campName || skipNames.some(s => campName === s)) continue;
-      if (cost <= 0) continue;
-
-      const ctrRaw = String(row[4]||'').replace(/"/g,'').trim();
-      const ctrVal = ctrRaw.endsWith('%') ? parseFloat(ctrRaw) : 0;
-      const isTotal = campName === 'Total';
-      const entry = {
-        name: isTotal ? '전체 (' + mediaLabel + ')' : campName,
-        imp: num(cells[2]), clk: num(cells[3]),
-        ctr: Math.round(ctrVal*100)/100,
-        cpc: num(cells[5]), cost,
-        reg: num(cells[7]), cpa: num(cells[9]),
-        isFirst: isTotal,
-      };
-      if (isTotal) campRows.unshift(entry); else campRows.push(entry);
     }
-    if (!campRows.length) return;
-    renderCampTable(el, campRows);
-    return;
+    // 전체 합산 재계산
+    if (campRows.length > 1) {
+      const nonTotal = campRows.filter(r => !r.isFirst);
+      const tot = nonTotal.reduce((a,c) => { a.imp+=c.imp; a.clk+=c.clk; a.cost+=c.cost; a.reg+=c.reg; return a; }, {imp:0,clk:0,cost:0,reg:0});
+      tot.cpa = tot.reg > 0 ? Math.round(tot.cost/tot.reg) : 0;
+      tot.ctr = tot.imp > 0 ? Math.round(tot.clk/tot.imp*10000)/100 : 0;
+      tot.cpc = tot.clk > 0 ? Math.round(tot.cost/tot.clk) : 0;
+      campRows[0] = { name: '전체 (TikTok)', ...tot, isFirst: true };
+    }
   }
 
-  // 전체 합산
-  const tot = validCamps.reduce((a, c) => {
-    a.imp += c.total.imp; a.clk += c.total.clk;
-    a.cost += c.total.cost; a.reg += c.total.reg;
-    return a;
-  }, {imp:0, clk:0, cost:0, reg:0});
-  tot.cpa = tot.reg > 0 ? Math.round(tot.cost / tot.reg) : 0;
-  tot.ctr = tot.imp > 0 ? Math.round(tot.clk / tot.imp * 10000) / 100 : 0;
-  tot.cpc = tot.clk > 0 ? Math.round(tot.cost / tot.clk) : 0;
-
-  const allRows = [
-    { name: '전체 (' + mediaLabel + ')', ...tot, isFirst: true },
-    ...validCamps.map(c => ({ name: c.name, ...c.total, isFirst: false }))
-  ];
-  renderCampTable(el, allRows);
+  if (!campRows.length) return;
+  renderCampTable(el, campRows);
 }
+
 
 function renderCampTable(el, rows) {
   let html = '<thead><tr><th>캠페인</th><th>노출</th><th>클릭</th><th>CTR</th><th>CPC</th><th>광고비</th><th>회원가입</th><th>CPA</th></tr></thead><tbody>';
@@ -1200,12 +1225,19 @@ async function loadAllData() {
     buildMonthlyTable(totalRows);
 
     // 매체별 캠페인 합계표
-    buildCampTable('tbl-google-camp', googleRows, 'google');
-    buildCampTable('tbl-fb-camp',     fbRows,     'fb');
-    buildCampTable('tbl-tiktok-camp', tiktokRows, 'tiktok');
+    // 매체 캠페인 합계 — Apps Script에서 파싱된 데이터 사용
+    const [googleCamps, fbCamps, tiktokCamps, appleCamps] = await Promise.all([
+      fetchCampaigns('Google'),
+      fetchCampaigns('Facebook'),
+      fetchCampaigns('Tiktok'),
+      fetchCampaigns('Apple'),
+    ]);
+    buildCampTableFromData('tbl-google-camp', googleCamps, 'Google');
+    buildCampTableFromData('tbl-fb-camp',     fbCamps,     'Facebook');
+    buildCampTableFromData('tbl-tiktok-camp', tiktokCamps, 'TikTok');
 
     // 매체별 캠페인 합계 + 일별
-    buildCampTable('tbl-apple-camp', appleRows, 'apple');
+    buildCampTableFromData('tbl-apple-camp', appleCamps, 'Apple');
     const mediaGoogle = googleRows.length ? extractTotalBlock(googleRows) : [];
     const mediaFb     = fbRows.length     ? extractTotalBlock(fbRows)        : [];
     const mediaTiktok = tiktokRows.length ? extractTotalBlock(tiktokRows) : [];
